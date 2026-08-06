@@ -208,6 +208,19 @@ CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y        # not defconfig's ALWAYS, which blo
 CONFIG_PSI=y                                 # Waydroid lmkd memory-pressure monitoring
 CONFIG_PSI_DEFAULT_DISABLED=y                # opt in with psi=1
 
+# ============== Suspend/resume diagnosis ==============
+# A suspend that will not hold is undiagnosable without these. pm_wakeup_irq
+# names the IRQ that pulled the SoC back out; it identified the TSENS wake this
+# PR fixes, after hand bisection had ruled out the fan tacho, Wi-Fi, the RTC and
+# every registered wakeup source without finding it. pm_test runs the suspend
+# path up to a chosen stage without entering the sleep state, so a failure can
+# be localized without a reboot per attempt.
+CONFIG_PM_DEBUG=y
+CONFIG_PM_ADVANCED_DEBUG=y
+CONFIG_PM_SLEEP_DEBUG=y
+# /sys/kernel/debug/irq/irqs/<n> exposes which IRQs are armed for wake.
+CONFIG_GENERIC_IRQ_DEBUGFS=y
+
 # ============== bootc / ostree / systemd ==============
 CONFIG_EROFS_FS=m
 CONFIG_EROFS_FS_BACKED_BY_FILE=y

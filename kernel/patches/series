@@ -152,3 +152,8 @@ v2_20260420_neil_armstrong_arm64_qcom_sm8650_misc_enhancements.patch
 0074-soundwire-qcom-PCM-data-port-format-enable.patch
 0612-ROCKNIX-odin3-q6apm-start-mi2s-port-at-prepare.patch
 0613-ASoC-q6apm-scope-prepare-start-to-MI2S.patch
+
+# SM8550 stays in deep suspend: TSENS uplow threshold IRQs are wake-armed by
+# default and pull the SoC back out within seconds. Critical thermal wake stays
+# enabled. From ROCKNIX #2954 (jaewun), scoped to the qcom,sm8550 compatible.
+0203-thermal-qcom-tsens-skip-sm8550-uplow-wake-irq.patch
