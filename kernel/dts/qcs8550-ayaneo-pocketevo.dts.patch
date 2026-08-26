@@ -52,7 +52,7 @@ index 1d83ad8..3411c9c 100644
 + */
 +&i2c_hub_2 {
 +	charger@5e {
-+		compatible = "halomicro,hl7139";
++		compatible = "ayaneo,pocket-evo-hl7139";
 +		reg = <0x5e>;
 +		intr-gpios = <&tlmm 9 GPIO_ACTIVE_HIGH>;
 +		power-supply-name = "hl7139-slave";
@@ -60,7 +60,7 @@ index 1d83ad8..3411c9c 100644
 +	};
 +
 +	charger@5f {
-+		compatible = "halomicro,hl7139";
++		compatible = "ayaneo,pocket-evo-hl7139";
 +		reg = <0x5f>;
 +		intr-gpios = <&tlmm 8 GPIO_ACTIVE_HIGH>;
 +		power-supply-name = "hl7139-master";

@@ -301,7 +301,7 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `patches/0063-power-supply-add-HL7139-charge-pump.patch`
   source: https://github.com/ROCKNIX/distribution/blob/caa36c39225e7f1bd58fd2017dafa87cb79086d4/projects/ROCKNIX/devices/SM8250/patches/linux/0063_Mangmi-Pocket-Max-HL7139-charge-pump.patch
   upstream: unknown
-  notes: Armada extends the ROCKNIX regmap/power-supply driver for Pocket EVO's parallel pumps: the Android factory register sequence, unique master/slave supply names, disabled-at-probe/remove behavior, IRQ-driven health/fault shutdown, and conservative enable gates for VBUS-good, no latched faults, 8-10 V input, 3.5-4.45 V battery, and a maximum 90 C die temperature. The 4.45 V enable ceiling matches the EVO factory DTBO's `vbatovp_alm`; the pumps retain their independently programmed 4.50 V `vbatovp` hardware cutoff. A dual-pump validation sustained a 27.2-27.5 W adapter request and 25.8-26.0 W at the pump inputs, with approximately 1.49/1.47 A pump balance, 4.8 A battery current, both supplies healthy, and no guard or kernel faults. Android's VBAT_OVP, IBAT_OCP, and IBUS_OCP fields are protections rather than Linux regulator limits, so only `ONLINE` is writable.
+  notes: Armada extends the ROCKNIX regmap/power-supply driver for Pocket EVO's parallel pumps: the Android factory register sequence, unique master/slave supply names, disabled-at-probe/remove behavior, IRQ-driven health/fault shutdown, and conservative enable gates for VBUS-good, no latched faults, an 8-10 V startup/inrush window, 3.5-4.45 V battery, and a maximum 90 C die temperature. The EVO-derived register sequence is selected only by `ayaneo,pocket-evo-hl7139`; it is not applied to a generic HL7139 compatible. The 4.45 V enable ceiling matches the EVO factory DTBO's `vbatovp_alm`; the pumps retain their independently programmed 4.50 V `vbatovp` hardware cutoff. A dual-pump validation sustained a 27.2-27.5 W adapter request and 25.8-26.0 W at the pump inputs, with approximately 1.49/1.47 A pump balance, 4.8 A battery current, both supplies healthy, and no guard or kernel faults. Android's VBAT_OVP, IBAT_OCP, and IBUS_OCP fields are protections rather than Linux regulator limits, so only `ONLINE` is writable.
 - `patches/0903-power-supply-hl7139-suspend-safety.patch`
   source: armada
   upstream: local
@@ -318,6 +318,10 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armada
   upstream: local
   notes: Propagates a pump-disable I2C error from suspend and verifies that `CHG_EN` actually cleared. Suspend is aborted if shutdown cannot be proven, leaving userspace monitoring available instead of permitting an uncontrolled direct-charge path during sleep.
+- `patches/0907-power-supply-harden-pocket-evo-charge-contract.patch`
+  source: armada
+  upstream: local
+  notes: Makes the validated active envelope explicit and kernel-enforced: PPS requests are limited to 3.3-10.5 V in 20 mV steps and the Qualcomm input-current vote is capped at 3 A. USB SET acknowledgements must match the exact outstanding property, and battery status reports direct Charging only when both pumps are online.
 - `patches/0001-pcie-update-sm8650-dtsi.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8650/patches/linux/0001-pcie-update-sm8650-dtsi.patch
   upstream: https://lore.kernel.org/r/20260611-wake-v2-35-2744251b1181@oss.qualcomm.com
@@ -511,7 +515,7 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8550/linux/dts/qcom/qcs8550-ayaneo-pocketevo.dts
 - `dts/qcs8550-ayaneo-pocketevo.dts.patch`
   source: armada
-  notes: Declares the Pocket EVO's Android-confirmed HL7139 slave at 0x5e (GPIO9 IRQ) and master at 0x5f (GPIO8 IRQ) on QUP hub I2C2. Both bind disabled and require an explicit charge-policy action after a valid PPS contract and Qualcomm-buck handoff.
+  notes: Declares the Pocket EVO's Android-confirmed HL7139 slave at 0x5e (GPIO9 IRQ) and master at 0x5f (GPIO8 IRQ) on QUP hub I2C2 using the EVO-specific compatible. Both bind disabled and require an explicit charge-policy action after a valid PPS contract and Qualcomm-buck handoff.
 - `dts/qcs8550-ayaneo-pockets2k.dts`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8550/linux/dts/qcom/qcs8550-ayaneo-pockets2k.dts
 - `dts/qcs8550-ayn-common.dtsi`
