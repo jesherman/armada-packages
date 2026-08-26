@@ -1,0 +1,63 @@
+From: Armada <noreply@armada.local>
+Subject: [PATCH] power: supply: qcom_battmgr: report PD-PPS adapter type
+
+Pocket EVO firmware reports USB_TYPE as SDP while USB_ADAP_TYPE correctly
+reports PD_PPS (8).  The generic usb_type sysfs value therefore cannot be
+used as a safe direct-charge preflight.
+
+Track whether the best-effort adapter query completed for the current read
+and report POWER_SUPPLY_USB_TYPE_PD_PPS only when that fresh raw value is 8.
+Fall back to the existing protocol type for all other values and when the
+adapter query fails, so other Qualcomm platforms retain current behavior.
+
+---
+ drivers/power/supply/qcom_battmgr.c | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -292,5 +292,6 @@ struct qcom_battmgr_usb {
+ 	bool online;
+ 	bool type_pair_reported;
++	bool adapter_type_valid;
+ 	unsigned int voltage_now;
+ 	unsigned int voltage_max;
+ 	unsigned int current_now;
+@@ -1001,16 +1002,20 @@ static int qcom_battmgr_usb_sm8350_update(struct qcom_battmgr *battmgr,
+ 						       USB_ADAP_TYPE, 0);
+ 		if (adapter_ret) {
++			battmgr->usb.adapter_type_valid = false;
+ 			dev_warn_ratelimited(battmgr->dev,
+ 					     "failed to read USB adapter type: %d\n",
+ 					     adapter_ret);
+-		} else if (!battmgr->usb.type_pair_reported ||
+-			   battmgr->usb.usb_type != battmgr->usb.reported_usb_type ||
+-			   battmgr->usb.adapter_type != battmgr->usb.reported_adapter_type) {
++		} else {
++			battmgr->usb.adapter_type_valid = true;
++			if (!battmgr->usb.type_pair_reported ||
++			    battmgr->usb.usb_type != battmgr->usb.reported_usb_type ||
++			    battmgr->usb.adapter_type != battmgr->usb.reported_adapter_type) {
+ 			dev_info(battmgr->dev, "USB protocol type %u, adapter type %u\n",
+ 				 battmgr->usb.usb_type, battmgr->usb.adapter_type);
+ 			battmgr->usb.reported_usb_type = battmgr->usb.usb_type;
+ 			battmgr->usb.reported_adapter_type = battmgr->usb.adapter_type;
+ 			battmgr->usb.type_pair_reported = true;
++			}
+ 		}
+ 	}
+ 	mutex_unlock(&battmgr->lock);
+@@ -1033,7 +1039,12 @@ static int qcom_battmgr_usb_get_property(struct power_supply *psy,
+ 		val->intval = battmgr->usb.current_limit;
+ 		break;
+ 	case POWER_SUPPLY_PROP_USB_TYPE:
+-		val->intval = battmgr->usb.usb_type;
++		/* USB_ADAP_TYPE is authoritative for PPS on Pocket EVO. */
++		if (battmgr->usb.adapter_type_valid &&
++		    battmgr->usb.adapter_type == 8)
++			val->intval = POWER_SUPPLY_USB_TYPE_PD_PPS;
++		else
++			val->intval = battmgr->usb.usb_type;
+ 		break;
+ 	default:
+ 		return -EINVAL;

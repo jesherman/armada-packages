@@ -294,6 +294,10 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armada
   upstream: local
   notes: Adds the two Qualcomm PMIC-GLINK controls used by Android's direct-charge policy: USB input-current limit (firmware property 5) and PPS voltage request (firmware property 1, gated on adapter type PD_PPS/8). Testing the exact Android protocol on Pocket EVO confirmed that a 13 mA input-current vote quiesces the Qualcomm buck even though the firmware continues to report the negotiated 3 A adapter capability; consequently the setter trusts the acknowledged write instead of rejecting it on that misleading readback. Independently re-verified on 2026-08-17: writing 13 mA to `input_current_limit` dropped USB input current 1.87 A -> 0 A and battery went from charging to discharging at ~4.9 A while the readback stayed frozen at 3 A, confirming the write path works and the readback is not the active vote.
+- `patches/0902-power-supply-qcom-battmgr-report-pd-pps-adapter.patch`
+  source: armada
+  upstream: local
+  notes: Reports PD PPS from Qualcomm firmware's fresh `USB_ADAP_TYPE` value when the generic USB protocol property incorrectly says SDP. This gives the direct-charge policy an authoritative PPS preflight while preserving the existing USB type on other adapters or when the supplemental query fails.
 - `patches/0063-power-supply-add-HL7139-charge-pump.patch`
   source: https://github.com/ROCKNIX/distribution/blob/caa36c39225e7f1bd58fd2017dafa87cb79086d4/projects/ROCKNIX/devices/SM8250/patches/linux/0063_Mangmi-Pocket-Max-HL7139-charge-pump.patch
   upstream: unknown
@@ -306,6 +310,14 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armada
   upstream: local
   notes: During direct charging the HL7139 pumps feed the battery and the Qualcomm buck is quiesced to 13 mA, so the battery-manager firmware reports Discharging even while ~4.8 A flows into the cell. This makes the battery supply report Charging whenever either hl7139 pump is online, so UPower/SteamOS show the correct icon. No-op on devices without the pumps.
+- `patches/0905-power-supply-hl7139-latch-faults-and-report-vbat.patch`
+  source: armada
+  upstream: local
+  notes: Serializes the HL7139 read-to-clear status registers and latches electrical and thermal faults in software until VBUS is absent. Also exposes each pump's local VBAT ADC for master/slave and battery-manager telemetry coherence checks, and disables the pumps on shutdown.
+- `patches/0906-power-supply-hl7139-verify-suspend-shutdown.patch`
+  source: armada
+  upstream: local
+  notes: Propagates a pump-disable I2C error from suspend and verifies that `CHG_EN` actually cleared. Suspend is aborted if shutdown cannot be proven, leaving userspace monitoring available instead of permitting an uncontrolled direct-charge path during sleep.
 - `patches/0001-pcie-update-sm8650-dtsi.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8650/patches/linux/0001-pcie-update-sm8650-dtsi.patch
   upstream: https://lore.kernel.org/r/20260611-wake-v2-35-2744251b1181@oss.qualcomm.com
