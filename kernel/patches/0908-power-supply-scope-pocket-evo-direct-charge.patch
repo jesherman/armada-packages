@@ -11,8 +11,8 @@ HL7139 boards with EVO-specific protection thresholds.
 
 ---
  drivers/power/supply/hl7139_charger.c | 32 ++++++++++++++++++++++++++------
- drivers/power/supply/qcom_battmgr.c   |  6 ++++++
- 2 files changed, 32 insertions(+), 6 deletions(-)
+ drivers/power/supply/qcom_battmgr.c   |  7 +++++++
+ 2 files changed, 33 insertions(+), 6 deletions(-)
 
 --- a/drivers/power/supply/hl7139_charger.c
 +++ b/drivers/power/supply/hl7139_charger.c
@@ -67,6 +67,14 @@ HL7139 boards with EVO-specific protection thresholds.
 +	{ .compatible = "halomicro,hl7139" },
 --- a/drivers/power/supply/qcom_battmgr.c
 +++ b/drivers/power/supply/qcom_battmgr.c
+@@ -8,6 +8,7 @@
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/nvmem-consumer.h>
++#include <linux/of.h>
+ #include <linux/of_device.h>
+ #include <linux/power_supply.h>
+ #include <linux/property.h>
 @@ -1120,6 +1120,9 @@ static int qcom_battmgr_usb_set_property(struct power_supply *psy,
  	unsigned int property;
  	int ret;
