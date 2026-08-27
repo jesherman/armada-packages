@@ -322,6 +322,10 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armada
   upstream: local
   notes: Makes the validated active envelope explicit and kernel-enforced: PPS requests are limited to 3.3-10.5 V in 20 mV steps and the Qualcomm input-current vote is capped at 3 A. USB SET acknowledgements must match the exact outstanding property, and battery status reports direct Charging only when both pumps are online.
+- `patches/0908-power-supply-scope-pocket-evo-direct-charge.patch`
+  source: armada
+  upstream: local
+  notes: Exposes the writable Qualcomm ICL/PPS controls only on the Pocket EVO and selects its Android-derived HL7139 initialization table through device match data. Generic HL7139 devices remain bindable without receiving EVO-specific register programming.
 - `patches/0001-pcie-update-sm8650-dtsi.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8650/patches/linux/0001-pcie-update-sm8650-dtsi.patch
   upstream: https://lore.kernel.org/r/20260611-wake-v2-35-2744251b1181@oss.qualcomm.com
