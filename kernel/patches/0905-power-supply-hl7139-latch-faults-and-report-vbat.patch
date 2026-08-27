@@ -24,19 +24,10 @@ ADC as voltage_avg for pair-level coherence checks.
  #include <linux/pm.h>
  #include <linux/power_supply.h>
  #include <linux/property.h>
-@@ -27,10 +28,12 @@
- #define HL7139_REG_STATUS_A	0x05
- #define  HL7139_STS_A_VIN_OVP	BIT(7)
- #define  HL7139_STS_A_VBAT_OVP	BIT(3)
+@@ -29,0 +31,1 @@
 +#define  HL7139_STS_A_FAULTS	(BIT(7) | BIT(3))
- #define HL7139_REG_STATUS_B	0x06
- #define  HL7139_STS_B_IIN_OCP	BIT(7)
- #define  HL7139_STS_B_IBAT_OCP	BIT(6)
- #define  HL7139_STS_B_CFLY_SHORT BIT(3)
- #define  HL7139_STS_B_THSD	BIT(0)
+@@ -34,0 +37,1 @@
 +#define  HL7139_STS_B_FAULTS	(BIT(7) | BIT(6) | BIT(3) | BIT(0))
- #define HL7139_REG_STATUS_C	0x07
- #define  HL7139_STS_C_VBUS_GOOD	BIT(0)
 @@ -106,6 +111,9 @@ struct hl7139 {
  	struct gpio_desc *irq_gpiod;
  	struct power_supply *psy;

@@ -10,39 +10,24 @@ table only through the Pocket EVO match data. This avoids programming unknown
 HL7139 boards with EVO-specific protection thresholds.
 
 ---
- drivers/power/supply/hl7139_charger.c | 29 ++++++++++++++++++++++-------
+ drivers/power/supply/hl7139_charger.c | 32 ++++++++++++++++++++++++++------
  drivers/power/supply/qcom_battmgr.c   |  6 ++++++
- 2 files changed, 28 insertions(+), 7 deletions(-)
+ 2 files changed, 32 insertions(+), 6 deletions(-)
 
 --- a/drivers/power/supply/hl7139_charger.c
 +++ b/drivers/power/supply/hl7139_charger.c
-@@ -109,9 +109,14 @@ struct hl7139 {
- 	struct power_supply_desc psy_desc;
- 	struct mutex status_lock;
- 	unsigned int fault_a;
- 	unsigned int fault_b;
- };
- 
+@@ -80,0 +81,5 @@
 +struct hl7139_init_data {
 +	const struct reg_sequence *sequence;
 +	size_t num_sequence;
 +};
 +
- /*
-  * Exact probe-time sequence from the Pocket EVO Android 13 factory driver
-  * (hl7139_charger.ko 0.0.1_TS, build ID a5ac08ad02da5f71d).  In
-@@ -131,6 +136,11 @@ static const struct reg_sequence hl7139_pocket_evo_init[] = {
- 	{ 0x40, 0x05 },
- };
- 
+@@ -104,0 +110,5 @@
 +static const struct hl7139_init_data hl7139_pocket_evo_data = {
 +	.sequence = hl7139_pocket_evo_init,
 +	.num_sequence = ARRAY_SIZE(hl7139_pocket_evo_init),
 +};
 +
- static int hl7139_clear_irqs(struct hl7139 *chip)
- {
- 	static const u8 read_to_clear_regs[] = {
 @@ -411,6 +421,7 @@ static int hl7139_probe(struct i2c_client *client)
  	struct device *dev = &client->dev;
  	struct power_supply_config cfg = {};
@@ -76,16 +61,10 @@ HL7139 boards with EVO-specific protection thresholds.
  
  	ret = hl7139_clear_irqs(chip, true);
  	if (ret)
-@@ -500,7 +516,8 @@ static void hl7139_remove(struct i2c_client *client)
- }
- 
- static const struct of_device_id hl7139_of_match[] = {
+@@ -556,1 +575,2 @@
 -	{ .compatible = "ayaneo,pocket-evo-hl7139" },
 +	{ .compatible = "ayaneo,pocket-evo-hl7139", .data = &hl7139_pocket_evo_data },
 +	{ .compatible = "halomicro,hl7139" },
- 	{ }
- };
- MODULE_DEVICE_TABLE(of, hl7139_of_match);
 --- a/drivers/power/supply/qcom_battmgr.c
 +++ b/drivers/power/supply/qcom_battmgr.c
 @@ -1120,6 +1120,9 @@ static int qcom_battmgr_usb_set_property(struct power_supply *psy,
