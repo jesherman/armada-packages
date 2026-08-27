@@ -105,6 +105,7 @@ v9_20260729_qualcomm_crypto_qce_runtime_pm_interconnect.patch
 0503-ROCKNIX-battery-name.patch
 
 # ============== Charging ==============
+0900-power-supply-qcom-battmgr-log-usb-adapter-type.patch
 0901-power-supply-qcom-battmgr-set-usb-input-current-limit.patch
 0902-power-supply-qcom-battmgr-report-pd-pps-adapter.patch
 0063-power-supply-add-HL7139-charge-pump.patch
