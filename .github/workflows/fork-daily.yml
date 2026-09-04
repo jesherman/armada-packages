@@ -202,19 +202,27 @@ jobs:
         if: steps.decide.outputs.build == 'yes'
         env:
           FORK_PAT: ${{ secrets.FORK_PAT }}
+        # NOTE: nested GHCR images (armada-packages/kernel) must be URL-encoded
+        # in the packages API. Best-effort: tries PATCH then POST for the
+        # visibility flip; never fails the build (a private package is caught
+        # by the device-pull check + Discord alert instead).
         run: |
           set -euo pipefail
-          for pkg in armada-packages/kernel armada; do
+          for pkg in "armada-packages%2Fkernel" "armada"; do
             vis="$(curl -s -H "Authorization: Bearer ${FORK_PAT}" \
-              "https://api.github.com/user/packages/container/${pkg##*/}" | jq -r '.visibility // "unknown"')"
+              "https://api.github.com/user/packages/container/${pkg}" | jq -r '.visibility // "unknown"')"
+            echo "${pkg}: visibility=${vis}"
             if [ "${vis}" != "public" ]; then
-              echo "Making ${pkg} public (was: ${vis})"
-              curl -sf -X POST -H "Authorization: Bearer ${FORK_PAT}" \
+              if ! curl -sf -X PATCH -H "Authorization: Bearer ${FORK_PAT}" \
                 -H 'Content-Type: application/json' \
                 -d '{"visibility":"public"}' \
-                "https://api.github.com/user/packages/container/${pkg##*/}/visibility"
-            else
-              echo "${pkg} already public"
+                "https://api.github.com/user/packages/container/${pkg}/visibility"; then
+                curl -sf -X POST -H "Authorization: Bearer ${FORK_PAT}" \
+                  -H 'Content-Type: application/json' \
+                  -d '{"visibility":"public"}' \
+                  "https://api.github.com/user/packages/container/${pkg}/visibility" || \
+                  echo "::warning::could not set ${pkg} public — the EVO pull will fail until flipped manually"
+              fi
             fi
           done
 
