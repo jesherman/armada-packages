@@ -1,0 +1,300 @@
+name: fork-daily
+
+# jesherman fork pipeline (Pocket EVO 30 W charging carry).
+#
+# Purpose: keep the two carried PR commits on top of upstream main daily,
+# rebuild the kernel package + OS image, publish to ghcr.io/jesherman, and
+# notify Discord on any failure. The EVO pulls ghcr.io/jesherman/armada:testing
+# via bootc (unsigned OK: the shipped device policy only sigstore-verifies the
+# upstream repos; its docker catch-all is insecureAcceptAnything).
+#
+# Branch layout:
+#   jesherman/armada-packages  carry-pocket-evo-30w-kernel  (kernel carry, 1 commit)
+#   jesherman/armada           carry/pocket-evo-30w         (policy carry, 1 commit)
+# This file must stay on the packages fork DEFAULT branch: GitHub only runs
+# scheduled workflows from the default branch. All checkouts pin the carry
+# branches explicitly, so main's other content is irrelevant.
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # 05:00 America/New_York
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write # cosign keyless (Sigstore OIDC)
+
+concurrency:
+  group: fork-daily
+  cancel-in-progress: false
+
+jobs:
+  kernel:
+    name: Sync + build kernel package
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      build: ${{ steps.sync.outputs.build }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - name: Tooling
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y podman buildah ccache runc skopeo
+          # Runner-image crun mismatches podman ("crun: unknown version"); runc is stable.
+          mkdir -p ~/.config/containers
+          printf '[engine]\nruntime = "runc"\n' > ~/.config/containers/containers.conf
+          mkdir -p "${CCACHE_DIR}"
+
+      - name: Checkout carry branch
+        uses: actions/checkout@v4
+        with:
+          ref: carry-pocket-evo-30w-kernel
+          fetch-depth: 0
+          token: ${{ secrets.FORK_PAT }}
+
+      - name: Daily rebase onto upstream main
+        id: sync
+        env:
+          FORK_PAT: ${{ secrets.FORK_PAT }}
+        run: |
+          set -euo pipefail
+          git config user.name "jesherman-fork-bot"
+          git config user.email "joshua@jesherman.com"
+          git remote add upstream https://github.com/armada-os/armada-packages.git
+          git fetch upstream main
+          BASE="$(git merge-base HEAD upstream/main)"
+          NEW="$(git rev-parse upstream/main)"
+          if [ "$BASE" != "$NEW" ]; then
+            echo "Upstream moved: rebasing carry onto $NEW"
+            git rebase upstream/main
+            git push --force-with-lease origin carry-pocket-evo-30w-kernel
+            echo "build=yes" >> "$GITHUB_OUTPUT"
+          elif ! skopeo inspect --format '{{.Digest}}' \
+                docker://ghcr.io/jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel >/dev/null 2>&1; then
+            echo "Upstream unchanged but no published kernel yet — building."
+            echo "build=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "Upstream unchanged, kernel already published — skipping build."
+            echo "build=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ccache
+        if: steps.sync.outputs.build == 'yes'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-kernel-${{ runner.arch }}-${{ hashFiles('toolchain.env') }}-${{ hashFiles('kernel/**') }}
+          restore-keys: |
+            ccache-kernel-${{ runner.arch }}-${{ hashFiles('toolchain.env') }}-
+
+      - name: Build kernel package
+        if: steps.sync.outputs.build == 'yes'
+        run: cd kernel && ./build.sh
+
+      - name: Stage image context
+        if: steps.sync.outputs.build == 'yes'
+        run: |
+          bash scripts/stage.sh kernel
+          echo "Staged:" && find ctx -type f | head -20
+
+      - name: Build + push kernel package
+        id: push
+        if: steps.sync.outputs.build == 'yes'
+        env:
+          IMAGE: ghcr.io/jesherman/armada-packages/kernel
+          CHANNEL_TAG: carry-pocket-evo-30w-kernel
+          FORK_PAT: ${{ secrets.FORK_PAT }}
+        run: |
+          IMMUTABLE_TAG="$(date -u +%Y%m%d)-$(git rev-parse --short=8 HEAD)"
+          buildah build -f oci/Containerfile -t "${IMAGE}:${IMMUTABLE_TAG}" .
+          buildah tag "${IMAGE}:${IMMUTABLE_TAG}" "${IMAGE}:${CHANNEL_TAG}"
+          echo "${FORK_PAT}" | buildah login -u jesherman --password-stdin ghcr.io
+          buildah push "${IMAGE}:${IMMUTABLE_TAG}"
+          buildah push --digestfile /tmp/digest "${IMAGE}:${CHANNEL_TAG}"
+          DIGEST="$(cat /tmp/digest)"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### kernel published"
+            echo "Digest pin: \`${IMAGE}@${DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install cosign
+        if: steps.sync.outputs.build == 'yes'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign kernel package (keyless, matches upstream)
+        if: steps.sync.outputs.build == 'yes'
+        env:
+          FORK_PAT: ${{ secrets.FORK_PAT }}
+        run: |
+          echo "${FORK_PAT}" | cosign login ghcr.io -u jesherman --password-stdin
+          cosign sign --yes "ghcr.io/jesherman/armada-packages/kernel@${{ steps.push.outputs.digest }}"
+
+      - name: Discord notify (kernel job failed)
+        if: failure()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
+        run: |
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d "{\"content\":\"🪫 Armada fork daily sync FAILED (kernel job) — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            "${WEBHOOK}" || true
+
+  image:
+    name: Sync + build OS image
+    needs: kernel
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      IMAGE_FULL: ghcr.io/jesherman/armada
+    steps:
+      - name: Tooling
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y podman buildah skopeo
+          mkdir -p ~/.config/containers
+          printf '[engine]\nruntime = "runc"\n' > ~/.config/containers/containers.conf
+
+      - name: Checkout armada carry branch
+        uses: actions/checkout@v4
+        with:
+          repository: jesherman/armada
+          ref: carry/pocket-evo-30w
+          fetch-depth: 0
+          token: ${{ secrets.FORK_PAT }}
+
+      - name: Daily rebase onto upstream main
+        id: sync
+        run: |
+          set -euo pipefail
+          git config user.name "jesherman-fork-bot"
+          git config user.email "joshua@jesherman.com"
+          git remote add upstream https://github.com/armada-os/armada.git
+          git fetch upstream main
+          BASE="$(git merge-base HEAD upstream/main)"
+          NEW="$(git rev-parse upstream/main)"
+          if [ "$BASE" != "$NEW" ]; then
+            echo "Upstream moved: rebasing carry onto $NEW"
+            git rebase upstream/main
+            git push --force-with-lease origin carry/pocket-evo-30w
+            echo "rebased=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "Armada upstream unchanged."
+            echo "rebased=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide build
+        id: decide
+        env:
+          KERNEL_DIGEST: ${{ needs.kernel.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KERNEL_DIGEST}" ] || [ "${{ steps.sync.outputs.rebased }}" = "yes" ] || \
+             ! skopeo inspect --format '{{.Digest}}' docker://${IMAGE_FULL}:testing >/dev/null 2>&1; then
+            echo "build=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing upstream changed and image already published — skipping."
+            echo "build=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ensure kernel + image packages are public
+        if: steps.decide.outputs.build == 'yes'
+        env:
+          FORK_PAT: ${{ secrets.FORK_PAT }}
+        run: |
+          set -euo pipefail
+          for pkg in armada-packages/kernel armada; do
+            vis="$(curl -s -H "Authorization: Bearer ${FORK_PAT}" \
+              "https://api.github.com/user/packages/container/${pkg##*/}" | jq -r '.visibility // "unknown"')"
+            if [ "${vis}" != "public" ]; then
+              echo "Making ${pkg} public (was: ${vis})"
+              curl -sf -X POST -H "Authorization: Bearer ${FORK_PAT}" \
+                -H 'Content-Type: application/json' \
+                -d '{"visibility":"public"}' \
+                "https://api.github.com/user/packages/container/${pkg##*/}/visibility"
+            else
+              echo "${pkg} already public"
+            fi
+          done
+
+      - name: Get image version
+        id: version
+        run: |
+          echo "created=$(date -u +%Y\-%m\-%d\T%H\:%M\:%S\Z)" >> $GITHUB_OUTPUT
+          echo "version=$(TZ=America/New_York date +%Y%m%d).$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build image (KERNEL_PKG = fork kernel)
+        if: steps.decide.outputs.build == 'yes'
+        env:
+          KERNEL_DIGEST: ${{ needs.kernel.outputs.digest }}
+          FORK_PAT: ${{ secrets.FORK_PAT }}
+        run: |
+          set -euo pipefail
+          echo "${FORK_PAT}" | buildah login -u jesherman --password-stdin ghcr.io
+          if [ -n "${KERNEL_DIGEST}" ]; then
+            KREF="ghcr.io/jesherman/armada-packages/kernel@${KERNEL_DIGEST}"
+          else
+            # Kernel unchanged this run: use the channel tag (latest built kernel).
+            KREF="ghcr.io/jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel"
+          fi
+          echo "KERNEL_PKG=${KREF}"
+          buildah build \
+            --build-arg KERNEL_PKG="${KREF}" \
+            --build-arg ARMADA_VERSION="${{ steps.version.outputs.version }}" \
+            -f ./Containerfile -t armada:raw .
+
+      - name: Rechunk for small OTA deltas
+        if: steps.decide.outputs.build == 'yes'
+        run: |
+          set -euxo pipefail
+          # build-chunked-oci runs rpm-ostree from inside the image against root
+          # containers-storage; bridge the rootless-built image over first.
+          sudo podman image scp ${USER}@localhost::armada:raw root@localhost::raw-img
+          sudo podman run --rm --privileged \
+            --volume /var/lib/containers:/var/lib/containers \
+            localhost/raw-img \
+            rpm-ostree compose build-chunked-oci --bootc --max-layers 127 \
+            --format-version 2 \
+            --from localhost/raw-img --output containers-storage:localhost/chunked-img
+
+      - name: Push to GHCR + channel tags
+        id: push
+        if: steps.decide.outputs.build == 'yes'
+        env:
+          FORK_PAT: ${{ secrets.FORK_PAT }}
+        run: |
+          set -euxo pipefail
+          echo "${FORK_PAT}" | sudo skopeo login ghcr.io -u jesherman --password-stdin
+          BUILD_TAG="build-${{ steps.version.outputs.version }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          n=0
+          until sudo skopeo copy containers-storage:localhost/chunked-img "docker://${IMAGE_FULL}:${BUILD_TAG}"; do
+            n=$((n + 1)); [ "${n}" -ge 3 ] && exit 1; sleep 15
+          done
+          digest=$(sudo skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_FULL}:${BUILD_TAG}")
+          for tag in testing "sha-${{ steps.version.outputs.version }}"; do
+            n=0
+            until sudo skopeo copy --all "docker://${IMAGE_FULL}@${digest}" "docker://${IMAGE_FULL}:${tag}"; do
+              n=$((n + 1)); [ "${n}" -ge 3 ] && exit 1; sleep 15
+            done
+          done
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE: ${IMAGE_FULL}@${digest} (testing)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Discord notify (image job failed)
+        if: failure()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
+        run: |
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d "{\"content\":\"🪫 Armada fork daily sync FAILED (image job) — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            "${WEBHOOK}" || true
+
+      - name: Discord notify (new image published)
+        if: steps.decide.outputs.build == 'yes' && steps.push.outputs.digest != ''
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
+        run: |
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d "{\"content\":\"🔋 Armada fork image published: ghcr.io/jesherman/armada:testing @ ${{ steps.push.outputs.digest }}\"}" \
+            "${WEBHOOK}" || true
