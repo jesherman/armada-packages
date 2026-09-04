@@ -18,7 +18,12 @@ name: fork-daily
 on:
   schedule:
     - cron: "0 9 * * *" # 05:00 America/New_York
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild + republish even if upstream unchanged (seed releases)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -59,6 +64,7 @@ jobs:
         id: sync
         env:
           FORK_PAT: ${{ secrets.FORK_PAT }}
+          FORCE: ${{ inputs.force || 'false' }}
         run: |
           set -euo pipefail
           git config user.name "jesherman-fork-bot"
@@ -71,6 +77,9 @@ jobs:
             echo "Upstream moved: rebasing carry onto $NEW"
             git rebase upstream/main
             git push --force-with-lease origin carry-pocket-evo-30w-kernel
+            echo "build=yes" >> "$GITHUB_OUTPUT"
+          elif [ "${FORCE}" = "true" ]; then
+            echo "Force rebuild requested — building."
             echo "build=yes" >> "$GITHUB_OUTPUT"
           elif ! skopeo inspect --format '{{.Digest}}' \
                 docker://ghcr.io/jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel >/dev/null 2>&1; then
@@ -133,6 +142,22 @@ jobs:
           echo "${FORK_PAT}" | cosign login ghcr.io -u jesherman --password-stdin
           cosign sign --yes "ghcr.io/jesherman/armada-packages/kernel@${{ steps.push.outputs.digest }}"
 
+      - name: Publish kernel tarball as rolling release (anonymous download)
+        if: steps.sync.outputs.build == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TARBALL="$(ls kernel/out/armada-kernel-*.tar.zst)"
+          KVER="$(basename "${TARBALL%.tar.zst}")"
+          KVER="${KVER#armada-kernel-}"
+          NOTES="Kernel package with Pocket EVO 30W HL7139 dual-pump charging (carry of armada-os/armada-packages#35 on latest upstream main). Built $(date -u +%Y-%m-%d).\n\nGHCR image: ghcr.io/jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel @ ${{ steps.push.outputs.digest }} (cosign keyless-signed).\n\nInstall via the standard Armada hotfix path (ostree admin unlock --hotfix, extract to /, depmod, dracut with the armada includes, copy vmlinuz+dtbs into the deployment tree, armada-bootimg-update). Keep the original versioned filename - install tooling derives KVER from it."
+          gh release delete fork-kernel --yes --cleanup-tag || true
+          gh release create fork-kernel "${TARBALL}" "${TARBALL}.sha256" \
+            --target carry-pocket-evo-30w-kernel \
+            --title "fork kernel ${KVER} (Pocket EVO 30W charging)" \
+            --notes "$(printf '%b' "${NOTES}")"
+
       - name: Discord notify (kernel job failed)
         if: failure()
         env:
@@ -191,9 +216,11 @@ jobs:
         id: decide
         env:
           KERNEL_DIGEST: ${{ needs.kernel.outputs.digest }}
+          FORCE: ${{ inputs.force || 'false' }}
         run: |
           set -euo pipefail
           if [ -n "${KERNEL_DIGEST}" ] || [ "${{ steps.sync.outputs.rebased }}" = "yes" ] || \
+             [ "${FORCE}" = "true" ] || \
              ! skopeo inspect --format '{{.Digest}}' docker://${IMAGE_FULL}:testing >/dev/null 2>&1; then
             echo "build=yes" >> "$GITHUB_OUTPUT"
           else
@@ -320,6 +347,34 @@ jobs:
           done
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "IMAGE: ${IMAGE_FULL}@${digest} (testing)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish image as split-OCI release (anonymous download)
+        if: steps.decide.outputs.build == 'yes'
+        env:
+          # Release targets the jesherman/armada repo (the job checks it out);
+          # workflow GITHUB_TOKEN is repo-scoped, so use the PAT.
+          GH_TOKEN: ${{ secrets.FORK_PAT }}
+        run: |
+          set -euo pipefail
+          # Export the pushed image to an OCI dir (compressed blobs), tar in
+          # <2 GiB parts so anyone can download anonymously from Releases.
+          rm -rf "${RUNNER_TEMP}/fork-oci"
+          skopeo copy --all "docker://${IMAGE_FULL}@${{ steps.push.outputs.digest }}" \
+            "oci:${RUNNER_TEMP}/fork-oci:testing"
+          tar -C "${RUNNER_TEMP}" -cf "${RUNNER_TEMP}/fork-image-oci.tar" fork-oci
+          cd "${RUNNER_TEMP}"
+          split -b 1900m -d -a 2 fork-image-oci.tar fork-image-oci.tar.part-
+          sha256sum fork-image-oci.tar > fork-image-oci.tar.sha256
+          sha256sum fork-image-oci.tar.part-* >> fork-image-oci.tar.sha256
+          rm -f fork-image-oci.tar
+          SIZE=$(du -sh "${RUNNER_TEMP}/fork-oci" | cut -f1)
+          NOTES="Full Armada OS image with Pocket EVO 30W charging (carry of armada-os/armada#258 + armada-packages#35 on latest upstream main). Built $(date -u +%Y-%m-%d). Uncompressed OCI dir: ${SIZE}.\n\nDigest: ${{ steps.push.outputs.digest }}\nGHCR: ghcr.io/jesherman/armada:testing (private; use this Release for anonymous download)\n\nRejoin: cat fork-image-oci.tar.part-* > fork-image-oci.tar, then verify with fork-image-oci.tar.sha256.\nImport: skopeo copy oci:fork-oci:testing containers-storage:...  or  bootc switch --transport oci ... (per bootc docs).\nDaily rolling release - rebuilt automatically from latest upstream testing + the charging carry."
+          gh release delete fork-image --yes --cleanup-tag --repo jesherman/armada || true
+          gh release create fork-image fork-image-oci.tar.part-* fork-image-oci.tar.sha256 \
+            --repo jesherman/armada \
+            --target main \
+            --title "Armada fork image $(date -u +%Y%m%d) (Pocket EVO 30W charging)" \
+            --notes "$(printf '%b' "${NOTES}")"
 
       - name: Verify anonymous pull (what the EVO does)
         if: steps.decide.outputs.build == 'yes'
