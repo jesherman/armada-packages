@@ -381,25 +381,23 @@ jobs:
         if: steps.decide.outputs.build == 'yes'
         env:
           WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
-        # GitHub has NO REST endpoint for package visibility (web UI only).
-        # Post-push check instead: verify the tags are anonymously pullable;
-        # if not, alert with the exact manual fix. Non-fatal by design.
+        # GHCR packages are PRIVATE by design — Releases are the anonymous
+        # channel. This check is informational only and must never fail the
+        # run (GHCR anon-token endpoint rate-limits intermittently).
         run: |
           set -euo pipefail
           for ref in "jesherman/armada:testing" "jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel"; do
             repo="${ref%%:*}"; tag="${ref##*:}"
-            tok=$(curl -sf "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)
+            tok=$(curl -s "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r '.token // empty') || true
+            if [ -z "${tok}" ]; then
+              echo "${repo}:${tag} → anon token unavailable (rate limit) — check skipped"
+              continue
+            fi
             code=$(curl -s -o /dev/null -w '%{http_code}' \
               -H "Authorization: Bearer ${tok}" \
               -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json" \
-              "https://ghcr.io/v2/${repo}/manifests/${tag}")
-            echo "${repo}:${tag} → HTTP ${code}"
-            if [ "${code}" != "200" ]; then
-              curl -sf -X POST -H 'Content-Type: application/json' \
-                -d "{\"content\":\"⚠️ GHCR ${repo}:${tag} is NOT anonymously pullable (HTTP ${code}). Flip it public: https://github.com/users/jesherman/packages — the EVO update fails until then.\"}" \
-                "${WEBHOOK}" || true
-              echo "::warning::${repo}:${tag} not anonymously pullable — flip visibility in the web UI"
-            fi
+              "https://ghcr.io/v2/${repo}/manifests/${tag}") || code=000
+            echo "${repo}:${tag} → HTTP ${code} (private by design; anonymous channel = Releases)"
           done
 
       - name: Discord notify (image job failed)
