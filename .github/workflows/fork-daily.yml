@@ -150,11 +150,14 @@ jobs:
     env:
       IMAGE_FULL: ghcr.io/jesherman/armada
     steps:
-      - name: Tooling
+      - name: Ensure container tools
         run: |
-          sudo apt-get update -y && sudo apt-get install -y podman buildah skopeo
-          mkdir -p ~/.config/containers
-          printf '[engine]\nruntime = "runc"\n' > ~/.config/containers/containers.conf
+          # ubuntu-24.04 runner image dropped these; mirror upstream build.yml.
+          need=""
+          for t in buildah skopeo jq; do
+            command -v "$t" >/dev/null || need="$need $t"
+          done
+          [ -z "$need" ] || { sudo apt-get update && sudo apt-get install -y $need; }
 
       - name: Checkout armada carry branch
         uses: actions/checkout@v4
@@ -232,14 +235,59 @@ jobs:
           echo "created=$(date -u +%Y\-%m\-%d\T%H\:%M\:%S\Z)" >> $GITHUB_OUTPUT
           echo "version=$(TZ=America/New_York date +%Y%m%d).$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      - name: Image Metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: metadata
+        with:
+          tags: |
+            type=raw,value=testing
+          labels: |
+            org.opencontainers.image.created=${{ steps.version.outputs.created }}
+            org.opencontainers.image.description=Armada + Pocket EVO 30W charging (jesherman fork)
+            org.opencontainers.image.licenses=GPL-2.0-or-later
+            org.opencontainers.image.source=https://github.com/jesherman/armada/blob/${{ github.sha }}/Containerfile
+            org.opencontainers.image.title=armada
+            org.opencontainers.image.vendor=jesherman
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            containers.bootc=1
+          sep-tags: " "
+          sep-annotations: " "
+
+      - name: Prepare Chunkah config
+        id: chunkah_config
+        env:
+          METADATA_JSON: ${{ steps.metadata.outputs.json }}
+          BASE_IMAGE: quay.io/fedora/fedora-bootc:44
+        run: |
+          set -euo pipefail
+          base_digest=$(skopeo inspect --override-arch arm64 --format '{{.Digest}}' \
+            "docker://${BASE_IMAGE}")
+          base_image="${BASE_IMAGE%:*}@${base_digest}"
+          config=$(skopeo inspect --override-arch arm64 --config \
+            "docker://${base_image}" |
+            jq -c --argjson metadata "${METADATA_JSON}" '
+              .config |
+              .Labels = ((.Labels // {}) + ($metadata.labels // {})) |
+              del(.Labels["ostree.commit"]) |
+              del(.Labels["ostree.final-diffid"])')
+          printf '%s\n' "${config}" > "${RUNNER_TEMP}/chunkah-config.json"
+          echo "base_image=${base_image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Require native OverlayFS
+        run: |
+          set -euxo pipefail
+          buildah info --storage-opt=overlay.mount_program= |
+            jq -e '.store.GraphStatus["Native Overlay Diff"] == "true"'
+
       - name: Build image (KERNEL_PKG = fork kernel)
+        id: build_image
         if: steps.decide.outputs.build == 'yes'
         env:
           KERNEL_DIGEST: ${{ needs.kernel.outputs.digest }}
           FORK_PAT: ${{ secrets.FORK_PAT }}
         run: |
           set -euo pipefail
-          echo "${FORK_PAT}" | buildah login -u jesherman --password-stdin ghcr.io
+          echo "${FORK_PAT}" | skopeo login -u jesherman --password-stdin ghcr.io
           if [ -n "${KERNEL_DIGEST}" ]; then
             KREF="ghcr.io/jesherman/armada-packages/kernel@${KERNEL_DIGEST}"
           else
@@ -250,21 +298,33 @@ jobs:
           buildah build \
             --build-arg KERNEL_PKG="${KREF}" \
             --build-arg ARMADA_VERSION="${{ steps.version.outputs.version }}" \
-            -f ./Containerfile -t armada:raw .
+            --build-arg BASE_IMAGE="${{ steps.chunkah_config.outputs.base_image }}" \
+            --build-arg CHUNKAH_CONFIG_STR="$(cat ${RUNNER_TEMP}/chunkah-config.json)" \
+            --skip-unused-stages=false \
+            --target=chunkah \
+            --volume="${{ runner.temp }}:/run/src" \
+            --security-opt=label=disable \
+            --storage-opt=overlay.mount_program= \
+            -f ./Containerfile -t armada:chunkah .
+          echo "Chunked OCI at oci:${RUNNER_TEMP}/chunked"
 
-      - name: Rechunk for small OTA deltas
+      - name: Validate Chunkah output
+        id: chunkah_output
         if: steps.decide.outputs.build == 'yes'
         run: |
           set -euxo pipefail
-          # build-chunked-oci runs rpm-ostree from inside the image against root
-          # containers-storage; bridge the rootless-built image over first.
-          sudo podman image scp ${USER}@localhost::armada:raw root@localhost::raw-img
-          sudo podman run --rm --privileged \
-            --volume /var/lib/containers:/var/lib/containers \
-            localhost/raw-img \
-            rpm-ostree compose build-chunked-oci --bootc --max-layers 127 \
-            --format-version 2 \
-            --from localhost/raw-img --output containers-storage:localhost/chunked-img
+          CHUNKED_REF="oci:${RUNNER_TEMP}/chunked"
+          skopeo inspect --raw "${CHUNKED_REF}" > "${RUNNER_TEMP}/chunkah-manifest.json"
+          jq -e '(.layers | length) > 1 and (.layers | length) <= 128' \
+            "${RUNNER_TEMP}/chunkah-manifest.json" || {
+              echo "::error::Chunkah output has an invalid layer count"; exit 1; }
+          skopeo inspect --config "${CHUNKED_REF}" > "${RUNNER_TEMP}/chunkah-image-config.json"
+          jq -e '.architecture == "arm64" and .os == "linux" and
+              .config.Cmd == ["/sbin/init"] and
+              .config.Labels["containers.bootc"] == "1" and
+              .config.Labels["ostree.bootable"] == "true"' \
+            "${RUNNER_TEMP}/chunkah-image-config.json"
+          echo "ref=${CHUNKED_REF}" >> "${GITHUB_OUTPUT}"
 
       - name: Push to GHCR + channel tags
         id: push
@@ -273,16 +333,16 @@ jobs:
           FORK_PAT: ${{ secrets.FORK_PAT }}
         run: |
           set -euxo pipefail
-          echo "${FORK_PAT}" | sudo skopeo login ghcr.io -u jesherman --password-stdin
+          echo "${FORK_PAT}" | skopeo login ghcr.io -u jesherman --password-stdin
           BUILD_TAG="build-${{ steps.version.outputs.version }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           n=0
-          until sudo skopeo copy containers-storage:localhost/chunked-img "docker://${IMAGE_FULL}:${BUILD_TAG}"; do
+          until skopeo copy --all "${{ steps.chunkah_output.outputs.ref }}" "docker://${IMAGE_FULL}:${BUILD_TAG}"; do
             n=$((n + 1)); [ "${n}" -ge 3 ] && exit 1; sleep 15
           done
-          digest=$(sudo skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_FULL}:${BUILD_TAG}")
+          digest=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_FULL}:${BUILD_TAG}")
           for tag in testing "sha-${{ steps.version.outputs.version }}"; do
             n=0
-            until sudo skopeo copy --all "docker://${IMAGE_FULL}@${digest}" "docker://${IMAGE_FULL}:${tag}"; do
+            until skopeo copy --all "docker://${IMAGE_FULL}@${digest}" "docker://${IMAGE_FULL}:${tag}"; do
               n=$((n + 1)); [ "${n}" -ge 3 ] && exit 1; sleep 15
             done
           done
