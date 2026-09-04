@@ -201,34 +201,6 @@ jobs:
             echo "build=no" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Ensure kernel + image packages are public
-        if: steps.decide.outputs.build == 'yes'
-        env:
-          FORK_PAT: ${{ secrets.FORK_PAT }}
-        # NOTE: nested GHCR images (armada-packages/kernel) must be URL-encoded
-        # in the packages API. Best-effort: tries PATCH then POST for the
-        # visibility flip; never fails the build (a private package is caught
-        # by the device-pull check + Discord alert instead).
-        run: |
-          set -euo pipefail
-          for pkg in "armada-packages%2Fkernel" "armada"; do
-            vis="$(curl -s -H "Authorization: Bearer ${FORK_PAT}" \
-              "https://api.github.com/user/packages/container/${pkg}" | jq -r '.visibility // "unknown"')"
-            echo "${pkg}: visibility=${vis}"
-            if [ "${vis}" != "public" ]; then
-              if ! curl -sf -X PATCH -H "Authorization: Bearer ${FORK_PAT}" \
-                -H 'Content-Type: application/json' \
-                -d '{"visibility":"public"}' \
-                "https://api.github.com/user/packages/container/${pkg}/visibility"; then
-                curl -sf -X POST -H "Authorization: Bearer ${FORK_PAT}" \
-                  -H 'Content-Type: application/json' \
-                  -d '{"visibility":"public"}' \
-                  "https://api.github.com/user/packages/container/${pkg}/visibility" || \
-                  echo "::warning::could not set ${pkg} public — the EVO pull will fail until flipped manually"
-              fi
-            fi
-          done
-
       - name: Get image version
         id: version
         run: |
@@ -348,6 +320,31 @@ jobs:
           done
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "IMAGE: ${IMAGE_FULL}@${digest} (testing)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify anonymous pull (what the EVO does)
+        if: steps.decide.outputs.build == 'yes'
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
+        # GitHub has NO REST endpoint for package visibility (web UI only).
+        # Post-push check instead: verify the tags are anonymously pullable;
+        # if not, alert with the exact manual fix. Non-fatal by design.
+        run: |
+          set -euo pipefail
+          for ref in "jesherman/armada:testing" "jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel"; do
+            repo="${ref%%:*}"; tag="${ref##*:}"
+            tok=$(curl -sf "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${tok}" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json" \
+              "https://ghcr.io/v2/${repo}/manifests/${tag}")
+            echo "${repo}:${tag} → HTTP ${code}"
+            if [ "${code}" != "200" ]; then
+              curl -sf -X POST -H 'Content-Type: application/json' \
+                -d "{\"content\":\"⚠️ GHCR ${repo}:${tag} is NOT anonymously pullable (HTTP ${code}). Flip it public: https://github.com/users/jesherman/packages — the EVO update fails until then.\"}" \
+                "${WEBHOOK}" || true
+              echo "::warning::${repo}:${tag} not anonymously pullable — flip visibility in the web UI"
+            fi
+          done
 
       - name: Discord notify (image job failed)
         if: failure()
