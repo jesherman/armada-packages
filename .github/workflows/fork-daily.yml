@@ -152,8 +152,9 @@ jobs:
           KVER="$(basename "${TARBALL%.tar.zst}")"
           KVER="${KVER#armada-kernel-}"
           NOTES="Kernel package with Pocket EVO 30W HL7139 dual-pump charging (carry of armada-os/armada-packages#35 on latest upstream main). Built $(date -u +%Y-%m-%d).\n\nGHCR image: ghcr.io/jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel @ ${{ steps.push.outputs.digest }} (cosign keyless-signed).\n\nInstall via the standard Armada hotfix path (ostree admin unlock --hotfix, extract to /, depmod, dracut with the armada includes, copy vmlinuz+dtbs into the deployment tree, armada-bootimg-update). Keep the original versioned filename - install tooling derives KVER from it."
-          gh release delete fork-kernel --yes --cleanup-tag || true
+          gh release delete fork-kernel --yes --cleanup-tag --repo jesherman/armada-packages || true
           gh release create fork-kernel "${TARBALL}" "${TARBALL}.sha256" \
+            --repo jesherman/armada-packages \
             --target carry-pocket-evo-30w-kernel \
             --title "fork kernel ${KVER} (Pocket EVO 30W charging)" \
             --notes "$(printf '%b' "${NOTES}")"
