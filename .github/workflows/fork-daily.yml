@@ -18,6 +18,9 @@ name: Armada EVO hourly upstream sync
 # branches explicitly, so main's other content is irrelevant.
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/fork-daily.yml']
   schedule:
     # Hourly so a new image is packaged within ~1h of upstream moving.
     # Both jobs skip (no build, no publish) when nothing changed.
