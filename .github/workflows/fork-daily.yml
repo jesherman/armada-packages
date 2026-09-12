@@ -72,7 +72,7 @@ jobs:
         id: sync
         env:
           FORK_PAT: ${{ secrets.FORK_PAT }}
-          FORCE: ${{ inputs.force || 'false' }}
+          FORCE: ${{ github.event_name == 'push' || inputs.force || 'false' }}
         run: |
           set -euo pipefail
           git config user.name "jesherman-fork-bot"
@@ -225,7 +225,7 @@ jobs:
         id: decide
         env:
           KERNEL_DIGEST: ${{ needs.kernel.outputs.digest }}
-          FORCE: ${{ inputs.force || 'false' }}
+          FORCE: ${{ github.event_name == 'push' || inputs.force || 'false' }}
         run: |
           set -euo pipefail
           if [ -n "${KERNEL_DIGEST}" ] || [ "${{ steps.sync.outputs.rebased }}" = "yes" ] || \
