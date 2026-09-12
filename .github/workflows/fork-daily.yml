@@ -21,7 +21,7 @@ on:
   push:
     branches: [main]
     paths: ['.github/workflows/fork-daily.yml']
-    # Workflow edits trigger an immediate validation run.
+    # Workflow edits trigger an immediate validation rebuild.
   schedule:
     # Hourly so a new image is packaged within ~1h of upstream moving.
     # Both jobs skip (no build, no publish) when nothing changed.
