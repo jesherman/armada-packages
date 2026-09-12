@@ -11,8 +11,8 @@ name: Armada EVO hourly upstream sync
 # (native armada-update hook checks ghcr.io/jesherman/armada:testing).
 #
 # Branch layout:
-#   jesherman/armada-packages  carry-pocket-evo-30w-kernel  (charging + PCIe1 sleep)
-#   jesherman/armada           carry/pocket-evo-30w         (charging policy)
+#   jesherman/armada-packages  carry-pocket-evo-30w-kernel  (kernel carry, 1 commit)
+#   jesherman/armada           carry/pocket-evo-30w         (policy carry, 1 commit)
 # This file must stay on the packages fork DEFAULT branch: GitHub only runs
 # scheduled workflows from the default branch. All checkouts pin the carry
 # branches explicitly, so main's other content is irrelevant.
@@ -155,7 +155,7 @@ jobs:
           TARBALL="$(ls kernel/out/armada-kernel-*.tar.zst)"
           KVER="$(basename "${TARBALL%.tar.zst}")"
           KVER="${KVER#armada-kernel-}"
-          NOTES="Kernel package with Pocket EVO 30W HL7139 dual-pump charging (carry of armada-os/armada-packages#35 on latest upstream main). Built $(date -u +%Y-%m-%d).\n\nGHCR image: ghcr.io/jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel @ ${{ steps.push.outputs.digest }} (cosign keyless-signed).\n\nInstall via the standard Armada hotfix path (ostree admin unlock --hotfix, extract to /, depmod, dracut with the armada includes, copy vmlinuz+dtbs into the deployment tree, armada-bootimg-update). Keep the original versioned filename - install tooling derives KVER from it."
+          NOTES="Armada:EVO kernel with Pocket EVO 30 W charging and PCIe1 s2idle support (carry of armada-os/armada-packages#35 on latest upstream main). Built $(date -u +%Y-%m-%d).\n\nGHCR image: ghcr.io/jesherman/armada-packages/kernel:carry-pocket-evo-30w-kernel @ ${{ steps.push.outputs.digest }} (cosign keyless-signed).\n\nInstall via the standard Armada hotfix path (ostree admin unlock --hotfix, extract to /, depmod, dracut with the armada includes, copy vmlinuz+dtbs into the deployment tree, armada-bootimg-update). Keep the original versioned filename - install tooling derives KVER from it."
           gh release delete fork-kernel --yes --cleanup-tag --repo jesherman/armada-packages || true
           gh release create fork-kernel "${TARBALL}" "${TARBALL}.sha256" \
             --repo jesherman/armada-packages \
@@ -247,10 +247,10 @@ jobs:
             type=raw,value=testing
           labels: |
             org.opencontainers.image.created=${{ steps.version.outputs.created }}
-            org.opencontainers.image.description=Armada:EVO with Pocket EVO 30 W charging and optimized s2idle
+            org.opencontainers.image.description=Armada + Pocket EVO 30W charging (jesherman fork)
             org.opencontainers.image.licenses=GPL-2.0-or-later
             org.opencontainers.image.source=https://github.com/jesherman/armada/blob/${{ github.sha }}/Containerfile
-            org.opencontainers.image.title=Armada:EVO
+            org.opencontainers.image.title=armada
             org.opencontainers.image.vendor=jesherman
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             containers.bootc=1
@@ -377,12 +377,12 @@ jobs:
           sha256sum fork-image-oci.tar.part-* >> fork-image-oci.tar.sha256
           rm -f fork-image-oci.tar
           SIZE=$(du -sh "${RUNNER_TEMP}/fork-oci" | cut -f1)
-          NOTES="Full Armada OS image with Pocket EVO 30W charging (carry of armada-os/armada#258 + armada-packages#35 on latest upstream main). Built $(date -u +%Y-%m-%d). Uncompressed OCI dir: ${SIZE}.\n\nDigest: ${{ steps.push.outputs.digest }}\nGHCR: ghcr.io/jesherman/armada:testing (private; use this Release for anonymous download)\n\nRejoin: cat fork-image-oci.tar.part-* > fork-image-oci.tar, then verify with fork-image-oci.tar.sha256.\nImport: skopeo copy oci:fork-oci:testing containers-storage:...  or  bootc switch --transport oci ... (per bootc docs).\nDaily rolling release - rebuilt automatically from latest upstream testing + the charging carry."
+          NOTES="Armada:EVO image with Pocket EVO 30 W charging and optimized s2idle (carry of armada-os/armada#258 + armada-packages#35 on latest upstream main). Built $(date -u +%Y-%m-%d). Uncompressed OCI dir: ${SIZE}.\n\nDigest: ${{ steps.push.outputs.digest }}\nGHCR: ghcr.io/jesherman/armada:testing (private; use this Release for anonymous download)\n\nRejoin: cat fork-image-oci.tar.part-* > fork-image-oci.tar, then verify with fork-image-oci.tar.sha256.\nImport: skopeo copy oci:fork-oci:testing containers-storage:...  or  bootc switch --transport oci ... (per bootc docs).\nHourly upstream-tracking release - rebuilt automatically from latest upstream testing + the charging carry."
           gh release delete fork-image --yes --cleanup-tag --repo jesherman/armada || true
           gh release create fork-image fork-image-oci.tar.part-* fork-image-oci.tar.sha256 \
             --repo jesherman/armada \
             --target main \
-            --title "Armada fork image $(date -u +%Y%m%d) (Pocket EVO 30W charging)" \
+            --title "Armada:EVO $(date -u +%Y%m%d) (30 W charging + optimized s2idle)" \
             --notes "$(printf '%b' "${NOTES}")"
 
       - name: Verify anonymous pull (what the EVO does)
